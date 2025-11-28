@@ -1,0 +1,8 @@
+﻿uploads/
+*.sql
+.env
+api/db.php
+node_modules/
+.vscode/
+.DS_Store
+Thumbs.db
