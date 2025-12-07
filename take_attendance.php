@@ -1,62 +1,124 @@
 <?php
-$studentsFile = __DIR__ . '/students.json';
-$students = [];
-if (file_exists($studentsFile)) {
-    $students = json_decode(file_get_contents($studentsFile), true) ?: [];
-}
-
 $today = date('Y-m-d');
 $attendanceFile = __DIR__ . '/attendance_' . $today . '.json';
 
-if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    // Prevent duplicate
-    if (file_exists($attendanceFile)) {
-        echo '<p>Attendance for today has already been taken.</p>';
-        echo '<p><a href="' . basename(__FILE__) . '">Back</a></p>';
-        exit;
+$students = [];
+$usingDb = false;
+// Try DB-backed students first (if DB configured)
+if (file_exists(__DIR__ . '/db_connect.php')) {
+    try {
+        require_once __DIR__ . '/db_connect.php';
+        $pdo = get_db_connection();
+        $stmt = $pdo->query('SELECT id, matricule, group_name FROM students ORDER BY id');
+        $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
+        if ($rows) {
+            foreach ($rows as $r) {
+                $students[] = ['student_id' => $r['id'], 'name' => $r['matricule'] ?: ('student_' . $r['id'])];
+            }
+            $usingDb = true;
+        }
+    } catch (Exception $e) {
+        // silently fall back to JSON file
+        $usingDb = false;
     }
+}
 
-    $attendance = [];
-    foreach ($students as $s) {
-        $id = $s['student_id'] ?? '';
-        $key = 'status_' . $id;
-        $status = isset($_POST[$key]) && $_POST[$key] === 'present' ? 'present' : 'absent';
-        $attendance[] = ['student_id' => $id, 'status' => $status];
+if (!$usingDb) {
+    $studentsFile = __DIR__ . '/students.json';
+    if (file_exists($studentsFile)) {
+        $students = json_decode(file_get_contents($studentsFile), true) ?: [];
     }
+}
 
-    if (file_put_contents($attendanceFile, json_encode($attendance, JSON_PRETTY_PRINT))) {
-        echo '<p>Attendance saved to ' . htmlspecialchars(basename($attendanceFile)) . '</p>';
-        echo '<p><a href="take_attendance.php">Back</a></p>';
-        exit;
-    } else {
-        echo '<p style="color:red">Failed to save attendance.</p>';
-    }
+// If attendance file already exists (legacy), show view link
+if (file_exists($attendanceFile)) {
+    ?>
+    <!doctype html>
+    <html><head><meta charset="utf-8"><title>Take Attendance</title></head><body>
+    <h2>Take Attendance (<?php echo htmlspecialchars($today); ?>)</h2>
+    <p>Attendance for today has already been taken.</p>
+    <p><a href="<?php echo htmlspecialchars(basename($attendanceFile)); ?>">View today's attendance</a></p>
+    <p><a href="list_students.php">Manage Students</a></p>
+    </body></html>
+    <?php
+    exit;
 }
 
 ?>
 <!doctype html>
-<html><head><meta charset="utf-8"><title>Take Attendance</title></head><body>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Take Attendance</title>
+  <style>
+    table { border-collapse: collapse; }
+    td, th { border: 1px solid #ccc; padding: 6px; }
+    .present { background: #e6ffe6; }
+  </style>
+</head>
+<body>
 <h2>Take Attendance (<?php echo htmlspecialchars($today); ?>)</h2>
-<?php if (file_exists($attendanceFile)): ?>
-  <p>Attendance for today has already been taken.</p>
-  <p><a href="<?php echo htmlspecialchars(basename($attendanceFile)); ?>">View today's attendance</a></p>
-<?php else: ?>
-  <form method="post">
-    <table border="1" cellpadding="6" cellspacing="0">
-      <tr><th>Student ID</th><th>Name</th><th>Status</th></tr>
-      <?php foreach ($students as $s): $id = $s['student_id'] ?? ''; ?>
-        <tr>
-          <td><?php echo htmlspecialchars($id); ?></td>
-          <td><?php echo htmlspecialchars($s['name'] ?? ''); ?></td>
-          <td>
-            <label><input type="radio" name="status_<?php echo htmlspecialchars($id); ?>" value="present" checked> Present</label>
-            <label><input type="radio" name="status_<?php echo htmlspecialchars($id); ?>" value="absent"> Absent</label>
-          </td>
-        </tr>
-      <?php endforeach; ?>
-    </table>
-    <p><button type="submit">Save Attendance</button></p>
-  </form>
-<?php endif; ?>
+
+<form id="attendance-form">
+  <table id="attendance-table">
+    <tr><th>Student ID</th><th>Name</th><th>Status</th></tr>
+    <?php foreach ($students as $s): $id = $s['student_id'] ?? ''; ?>
+      <tr data-student-id="<?php echo htmlspecialchars($id); ?>">
+        <td><?php echo htmlspecialchars($id); ?></td>
+        <td><?php echo htmlspecialchars($s['name'] ?? ''); ?></td>
+        <td>
+          <select name="status_<?php echo htmlspecialchars($id); ?>">
+            <option value="present">Present</option>
+            <option value="absent">Absent</option>
+            <option value="late">Late</option>
+            <option value="excused">Excused</option>
+          </select>
+        </td>
+      </tr>
+    <?php endforeach; ?>
+  </table>
+  <p>
+    <button id="save-btn" type="button">Save Attendance (DB)</button>
+    <button id="save-legacy" type="submit">Save Legacy (file)</button>
+  </p>
+</form>
+
 <p><a href="list_students.php">Manage Students</a></p>
+
+<script>
+document.getElementById('save-btn').addEventListener('click', function () {
+  const rows = document.querySelectorAll('#attendance-table tr[data-student-id]');
+  const attendance = [];
+  rows.forEach(function (r) {
+    const sid = r.getAttribute('data-student-id');
+    const sel = r.querySelector('select');
+    const status = sel ? sel.value : 'absent';
+    attendance.push({ student_id: sid, status: status });
+  });
+
+  const payload = { date: '<?php echo $today; ?>', attendance: attendance };
+
+  fetch('api/save_attendance.php', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  }).then(r => r.json()).then(function (data) {
+    if (data && data.success) {
+      alert('Attendance saved (session id: ' + data.session_id + ')');
+      location.reload();
+    } else {
+      alert('Save failed: ' + (data && data.error ? data.error : 'unknown'));
+    }
+  }).catch(function (err) {
+    alert('Network error saving attendance: ' + err);
+  });
+});
+
+// Legacy submit still posts to the old file-saving behavior
+document.getElementById('attendance-form').addEventListener('submit', function (e) {
+  // leave as normal form submit for backward-compatibility
+});
+</script>
+
 </body></html>
+
