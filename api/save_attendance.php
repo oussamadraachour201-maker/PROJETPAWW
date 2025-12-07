@@ -11,7 +11,22 @@ try {
     }
 
     require_once __DIR__ . '/../db_connect.php';
+    require_once __DIR__ . '/../auth_helpers.php';
     $pdo = get_db_connection();
+
+    // require logged-in user
+    $user = current_user();
+    if (!$user) {
+        http_response_code(401);
+        echo json_encode(['success' => false, 'error' => 'Authentication required']);
+        exit;
+    }
+    // only professors and admins can record attendance
+    if (!in_array($user['role'], ['professor','admin'])) {
+        http_response_code(403);
+        echo json_encode(['success' => false, 'error' => 'Permission denied']);
+        exit;
+    }
 
     // Basic validation
     $attendanceList = $data['attendance'] ?? null;
@@ -26,12 +41,10 @@ try {
     $courseId = $data['course_id'] ?? 0;
 
     if (!$sessionId) {
-        // Create a new session row
-        $stmt = $pdo->prepare('INSERT INTO sessions (course_id, date, opened_by, status) VALUES (?, ?, NULL, ? )');
-        $stmt->execute([$courseId, $date, 'open']);
+        // Create a new session row and set opened_by to current user
+        $stmt = $pdo->prepare('INSERT INTO sessions (course_id, date, opened_by, status) VALUES (?, ?, ?, ? )');
+        $stmt->execute([$courseId, $date, $user['id'], 'open']);
         $sessionId = $pdo->lastInsertId();
-    } else {
-        // Optionally ensure session exists; leave as-is
     }
 
     // Prepare insert for attendance rows
