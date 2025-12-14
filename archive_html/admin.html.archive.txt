@@ -1,5 +1,0 @@
-Archived original file: admin.html
-Archived at: 2025-11-30
-
-Note: The live site now uses `admin.php`. The original HTML was archived and removed from active use.
-If you need the full original file, retrieve it from version control or contact the maintainer.
