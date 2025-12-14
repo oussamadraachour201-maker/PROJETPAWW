@@ -1,8 +1,0 @@
-﻿<?php
-// Database Configuration (example)
- = 'localhost';
- = 'root';
- = 'YOUR_DB_PASSWORD';
- = 'attendance_system';
- = 3307;
-?>
